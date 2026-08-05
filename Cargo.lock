@@ -90,6 +90,8 @@ dependencies = [
  "tokio",
  "tower-lsp-server",
  "tree-sitter",
+ "tree-sitter-deep-pink-ink",
+ "tree-sitter-ink",
  "type-sitter",
  "type-sitter-gen",
 ]
@@ -825,6 +827,22 @@ dependencies = [
  "regex-syntax",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-deep-pink-ink"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-ink"
+version = "26.5.5"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

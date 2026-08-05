@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use deep_ink_language_server::document_sync::InkDocument;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
@@ -5,6 +8,7 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 #[derive(Debug)]
 struct Backend {
     client: Client,
+    open_documents: HashMap<Uri, InkDocument>,
 }
 
 impl LanguageServer for Backend {
@@ -12,48 +16,17 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 position_encoding: None,
-                text_document_sync: Some(TextDocumentSyncCapability::Options(
-                    TextDocumentSyncOptions {
-                        open_close: Some(true),
-                        change: Some(true),
-                        will_save: Some(true),
-                        will_save_wait_until: Some(true),
-                        save: Some(true),
-                    },
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
                 )),
-                notebook_document_sync: None,
-                selection_range_provider: None,
-                hover_provider: None,
-                completion_provider: None,
-                signature_help_provider: None,
-                definition_provider: None,
-                type_definition_provider: None,
-                implementation_provider: None,
-                references_provider: None,
-                document_highlight_provider: None,
-                document_symbol_provider: None,
-                workspace_symbol_provider: None,
-                code_action_provider: None,
-                code_lens_provider: None,
-                document_formatting_provider: None,
-                document_range_formatting_provider: None,
-                document_on_type_formatting_provider: None,
-                rename_provider: None,
-                document_link_provider: None,
-                color_provider: None,
-                folding_range_provider: None,
-                declaration_provider: None,
-                execute_command_provider: None,
-                workspace: None,
-                call_hierarchy_provider: None,
-                semantic_tokens_provider: None,
-                moniker_provider: None,
-                linked_editing_range_provider: None,
-                inline_value_provider: None,
-                inlay_hint_provider: None,
-                diagnostic_provider: None,
-                inline_completion_provider: None,
-                ..Default::default()
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
+                ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
                 name: "deep_ink_language_server".to_owned(),
@@ -61,6 +34,12 @@ impl LanguageServer for Backend {
             }),
             offset_encoding: None,
         })
+    }
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        self.client
+            .log_message(MessageType::INFO, "did change workspace folders!")
+            .await;
     }
 
     async fn initialized(&self, _: InitializedParams) {
@@ -71,6 +50,29 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file opened!")
+            .await;
+    }
+
+    async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file changed!")
+            .await;
+    }
+
+    async fn did_save(&self, _: DidSaveTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file saved!")
+            .await;
+    }
+    async fn did_close(&self, _: DidCloseTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file closed!")
+            .await;
     }
 }
 
