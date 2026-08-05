@@ -1,0 +1,6 @@
+[submodule "vendored/tree-sitter-deep-pink-ink"]
+	path = vendored/tree-sitter-deep-pink-ink
+	url = https://github.com/deep-Pink/tree-sitter-deep-pink-ink.git
+[submodule "vendored/tree-sitter-ink"]
+	path = vendored/tree-sitter-ink
+	url = https://github.com/Deep-Pink/tree-sitter-ink.git
