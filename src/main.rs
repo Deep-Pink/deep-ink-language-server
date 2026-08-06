@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use deep_ink_language_server::db::LspDb;
 use deep_ink_language_server::{DbMessage, LspMessage, OpenInkDocument, UpdateInkDocument};
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
@@ -8,14 +12,14 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 struct Backend {
     client: Client,
     db_message_sender: Sender<DbMessage>,
-    lsp_message_receiver: Receiver<LspMessage>,
+    lsp_message_receiver: Arc<RwLock<Receiver<LspMessage>>>,
 }
 
 impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                position_encoding: None,
+                position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
@@ -26,6 +30,16 @@ impl LanguageServer for Backend {
                     }),
                     file_operations: None,
                 }),
+                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
+                    DiagnosticOptions {
+                        identifier: None,
+                        inter_file_dependencies: true,
+                        workspace_diagnostics: true,
+                        work_done_progress_options: WorkDoneProgressOptions {
+                            work_done_progress: None,
+                        },
+                    },
+                )),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -64,9 +78,11 @@ impl LanguageServer for Backend {
                 contents: params.text_document.text.clone(),
             }))
             .await;
+
+        let _ = self.wait_and_publish_diagnostics().await;
     }
 
-    async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file changed!")
             .await;
@@ -83,17 +99,56 @@ impl LanguageServer for Backend {
             .db_message_sender
             .send(DbMessage::Update(changes))
             .await;
+
+        let _ = self.wait_and_publish_diagnostics().await;
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file saved!")
             .await;
+        let _ = self.wait_and_publish_diagnostics().await;
     }
+
     async fn did_close(&self, _: DidCloseTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file closed!")
             .await;
+    }
+}
+
+impl Backend {
+    async fn wait_and_publish_diagnostics(&self) {
+        let mut receiver = self.lsp_message_receiver.write().await;
+        if let Some(LspMessage::Diagnostics(diagnostics)) = receiver.recv().await {
+            let mut map: HashMap<(Uri, i32), Vec<Diagnostic>> = HashMap::new();
+            for d in diagnostics {
+                let diagnostic = Diagnostic {
+                    range: d.range.clone(),
+                    severity: d.severity.clone(),
+                    code: None,
+                    code_description: None,
+                    source: d.source.clone(),
+                    message: d.message.clone(),
+                    related_information: d.related_information.clone(),
+                    tags: d.tags.clone(),
+                    ..Default::default()
+                };
+                match map.entry((d.uri.clone(), d.version)) {
+                    std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
+                        occupied_entry.get_mut().push(diagnostic);
+                    }
+                    std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                        vacant_entry.insert(vec![diagnostic]);
+                    }
+                };
+            }
+            for ((uri, version), diagnostics) in map.into_iter() {
+                self.client
+                    .publish_diagnostics(uri, diagnostics, Some(version))
+                    .await;
+            }
+        }
     }
 }
 
@@ -107,7 +162,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         db_message_sender,
-        lsp_message_receiver,
+        lsp_message_receiver: Arc::new(RwLock::new(lsp_message_receiver)),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
     join_handle.await.expect("Expected join");

@@ -1,7 +1,7 @@
 use ropey::Rope;
 use salsa::{Accumulator, Setter, Storage};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, RwLock},
 };
 use tokio::sync::mpsc::Receiver;
@@ -101,8 +101,8 @@ impl Documents {
             // let start_byte = rope.char_to_byte(start_char);
             let old_end_char = rope.line_to_char(end.line as usize) + (end.character as usize);
             // let old_end_byte = rope.char_to_byte(old_end_char);
-            let new_text_rope = Rope::from_str(&update.new_text);
-            let new_end_char = start_char + new_text_rope.len_chars();
+            // let new_text_rope = Rope::from_str(&update.new_text);
+            // let new_end_char = start_char + new_text_rope.len_chars();
             rope.remove(start_char..old_end_char);
             rope.insert(start_char, &update.new_text);
             // let new_end_byte = rope.char_to_byte(new_end_char);
@@ -177,23 +177,26 @@ impl LspDb {
         tokio::spawn(async move {
             let mut db = LspDb::new(db_message_receiver, lsp_message_sender);
             while let Some(cmd) = db.db_message_receiver.recv().await {
+                let mut should_analyze = false;
                 match cmd {
-                    DbMessage::Start => {}
                     DbMessage::Open(open_ink_document) => {
                         db.documents
                             .unwrap()
                             .handle_open_document(&mut db, &open_ink_document);
+                        should_analyze = true;
                     }
                     DbMessage::Update(update_ink_documents) => {
                         db.documents
                             .unwrap()
                             .update_ink_documents(&mut db, update_ink_documents);
+                        should_analyze = true;
                     }
                     DbMessage::Remove(remove_ink_document) => {
                         let documents = db.documents.unwrap();
                         let mut documents_map = documents.documents(&db).clone();
                         documents_map.remove(&remove_ink_document.uri);
                         documents.set_documents(&mut db).to(documents_map);
+                        should_analyze = true;
                     }
                     DbMessage::Rename(rename_ink_document) => {
                         let documents = db.documents.unwrap();
@@ -203,8 +206,24 @@ impl LspDb {
                             documents_map.insert(rename_ink_document.new_uri, old_value);
                         };
                         documents.set_documents(&mut db).to(documents_map);
+                        should_analyze = true;
+                    }
+                    DbMessage::RequestDiagnostics => {
+                        should_analyze = true;
                     }
                 }
+                if (should_analyze) {
+                    let documents = db.documents.clone().unwrap();
+                    analyze_documents(&db, documents.clone());
+                    let ink_diagnostics =
+                        analyze_documents::accumulated::<InkDiagnostic>(&db, documents.clone())
+                            .clone();
+                    let cloned: Vec<InkDiagnostic> = ink_diagnostics.into_iter().cloned().collect();
+                    let _ = db
+                        .lsp_message_sender
+                        .send(LspMessage::Diagnostics(cloned))
+                        .await;
+                };
             }
             ()
         })
@@ -214,8 +233,6 @@ impl LspDb {
 #[salsa::db]
 pub trait Db: salsa::Database {
     fn parse_ink(&self, rope: &Rope) -> Option<Tree>;
-
-    fn documents(&self) -> std::collections::hash_map::Values<Uri, InkDocument>;
 }
 
 #[salsa::db]
@@ -234,10 +251,6 @@ impl Db for LspDb {
         };
         parser.parse_with_options(&mut feeder, None, None)
     }
-
-    fn documents(&self) -> std::collections::hash_map::Values<Uri, InkDocument> {
-        self.documents.unwrap().documents(self).values()
-    }
 }
 
 #[salsa::tracked]
@@ -254,8 +267,10 @@ pub fn parse_document<'db>(db: &'db dyn Db, document: InkDocument) -> InkAst<'db
 }
 
 #[salsa::accumulator]
+#[derive(Clone)]
 pub struct InkDiagnostic {
     pub uri: Uri,
+    pub version: i32,
     // /// The range at which the message applies.
     pub range: Range,
 
@@ -292,6 +307,7 @@ pub struct InkDiagnostic {
 impl InkDiagnostic {
     fn from_error_or_missing_capture(
         uri: Uri,
+        version: i32,
         capture: &QueryCapture,
         capture_names: &[&str],
     ) -> Self {
@@ -309,6 +325,7 @@ impl InkDiagnostic {
 
         InkDiagnostic {
             uri,
+            version,
             range: Range {
                 start: Position::new(
                     range.start_point.row as u32,
@@ -349,6 +366,7 @@ pub fn raise_ink_syntax_errors<'db>(
             for capture in mtch.captures {
                 InkDiagnostic::from_error_or_missing_capture(
                     ink_document.uri(db),
+                    *ink_document.version(db),
                     capture,
                     capture_names,
                 )
@@ -359,9 +377,9 @@ pub fn raise_ink_syntax_errors<'db>(
 }
 
 #[salsa::tracked]
-pub fn analyze_documents<'db>(db: &'db dyn Db) {
+pub fn analyze_documents<'db>(db: &'db dyn Db, documents: Documents) {
     let mut syntax_trees: HashMap<Uri, &InkAst> = HashMap::new();
-    for document in db.documents() {
+    for document in documents.documents(db).values() {
         let ink_ast = parse_document(db, document.clone());
         raise_ink_syntax_errors(db, document.clone(), ink_ast.clone());
         syntax_trees.insert(document.uri(db), ink_ast);

@@ -24,7 +24,7 @@ pub mod db;
 pub mod ropey_text_provider;
 
 pub enum DbMessage {
-    Start,
+    RequestDiagnostics,
     Open(OpenInkDocument),
     Update(Vec<UpdateInkDocument>),
     Remove(RemoveInkDocument),
@@ -32,7 +32,6 @@ pub enum DbMessage {
 }
 
 pub enum LspMessage {
-    Start,
     Diagnostics(Vec<InkDiagnostic>),
 }
 
