@@ -14,4 +14,5 @@ pub mod ink_nodes {
 //     include!(concat!(env!("OUT_DIR"), "/ink_queries.rs"));
 // }
 
+pub mod db;
 pub mod document_sync;

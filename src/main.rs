@@ -8,7 +8,7 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 #[derive(Debug)]
 struct Backend {
     client: Client,
-    open_documents: HashMap<Uri, InkDocument>,
+    // open_documents: HashMap<Uri, InkDocument>,
 }
 
 impl LanguageServer for Backend {
