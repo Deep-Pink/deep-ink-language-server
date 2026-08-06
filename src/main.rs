@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-
-use deep_ink_language_server::document_sync::InkDocument;
+use deep_ink_language_server::db::LspDb;
+use deep_ink_language_server::{DbMessage, LspMessage, OpenInkDocument, UpdateInkDocument};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
-#[derive(Debug)]
 struct Backend {
     client: Client,
-    // open_documents: HashMap<Uri, InkDocument>,
+    db_message_sender: Sender<DbMessage>,
+    lsp_message_receiver: Receiver<LspMessage>,
 }
 
 impl LanguageServer for Backend {
@@ -56,11 +56,32 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "file opened!")
             .await;
+        let _ = self
+            .db_message_sender
+            .send(DbMessage::Open(OpenInkDocument {
+                uri: params.text_document.uri.clone(),
+                version: params.text_document.version,
+                contents: params.text_document.text.clone(),
+            }))
+            .await;
     }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file changed!")
+            .await;
+        let mut changes: Vec<UpdateInkDocument> = vec![];
+        for change in params.content_changes {
+            changes.push(UpdateInkDocument {
+                uri: params.text_document.uri.clone(),
+                version: params.text_document.version,
+                range: change.range.clone(),
+                new_text: change.text.clone(),
+            });
+        }
+        let _ = self
+            .db_message_sender
+            .send(DbMessage::Update(changes))
             .await;
     }
 
@@ -80,7 +101,14 @@ impl LanguageServer for Backend {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-
-    let (service, socket) = LspService::new(|client| Backend { client });
+    let (db_message_sender, db_message_receiver) = channel(32);
+    let (lsp_message_sender, lsp_message_receiver) = channel(32);
+    let join_handle = LspDb::start_database_service(db_message_receiver, lsp_message_sender);
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        db_message_sender,
+        lsp_message_receiver,
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
+    join_handle.await.expect("Expected join");
 }

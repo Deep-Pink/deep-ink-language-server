@@ -47,18 +47,18 @@ fn main() {
     // )
     // .unwrap();
 
-    // fs::write(
-    //     out_dir.join("ink_queries.rs"),
-    //     generate_queries(
-    //         "ink-queries",
-    //         "vendored/tree-sitter-ink",
-    //         // Replace with a different `syn::Path` if the nodes don't exist in a subling to `dest_path` named `nodes`
-    //         &super_nodes(),
-    //         // Replace with `true` if you are using the `yak-sitter` feature (by default, no)
-    //         false,
-    //     )
-    //     .unwrap()
-    //     .into_string(),
-    // )
-    // .unwrap();
+    fs::write(
+        out_dir.join("ink_queries.rs"),
+        generate_queries(
+            "ink_queries",
+            "vendored/tree-sitter-ink",
+            // Replace with a different `syn::Path` if the nodes don't exist in a subling to `dest_path` named `nodes`
+            &super_nodes(),
+            // Replace with `true` if you are using the `yak-sitter` feature (by default, no)
+            false,
+        )
+        .unwrap()
+        .into_string(),
+    )
+    .unwrap();
 }
