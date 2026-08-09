@@ -10,9 +10,5 @@ tree-sitter = "0.26.11"
 type-sitter = { version = "0.10.1", default-features = false }
 tree-sitter-ink = {path = "vendored/tree-sitter-ink"}
 tree-sitter-deep-pink-ink = {path = "vendored/tree-sitter-deep-pink-ink"}
-salsa = "0.28.2"
-dashmap = "6.2.1"
 ropey = "1.6.1"
-
-[build-dependencies]
-type-sitter-gen = "0.10.1"
+im = "15.1.0"

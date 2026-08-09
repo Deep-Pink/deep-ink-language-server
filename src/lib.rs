@@ -1,39 +1,19 @@
-use std::collections::HashSet;
-
-use tower_lsp_server::ls_types::{Range, Uri};
-
-use crate::db::InkDiagnostic;
-
-pub mod deep_ink_nodes {
-    include!(concat!(env!("OUT_DIR"), "/deep_ink_nodes.rs"));
-}
-
-// mod deep_ink_queries {
-//     include!(concat!(env!("OUT_DIR"), "/deep_ink_queries.rs"));
-// }
-
-pub mod ink_nodes {
-    include!(concat!(env!("OUT_DIR"), "/ink_nodes.rs"));
-}
-
-mod ink_queries {
-    include!(concat!(env!("OUT_DIR"), "/ink_queries.rs"));
-}
-
+use im::hashmap::HashMap;
+use tokio::sync::mpsc::Sender;
+use tower_lsp_server::ls_types::{Diagnostic, Range, Uri};
 pub mod db;
 pub mod ropey_text_provider;
 
 pub enum DbMessage {
-    RequestDiagnostics,
-    Open(OpenInkDocument),
-    Update(Vec<UpdateInkDocument>),
-    Remove(RemoveInkDocument),
-    Rename(RenameInkDocument),
+    RequestDiagnostics(Sender<DiagnosticsMessage>),
+    Open(OpenInkDocument, Sender<DiagnosticsMessage>),
+    Update(Vec<UpdateInkDocument>, Sender<DiagnosticsMessage>),
+    Remove(RemoveInkDocument, Sender<DiagnosticsMessage>),
+    Rename(RenameInkDocument, Sender<DiagnosticsMessage>),
 }
 
-pub enum LspMessage {
-    Diagnostics(Vec<InkDiagnostic>),
-}
+#[derive(Debug, Clone)]
+pub struct DiagnosticsMessage(pub HashMap<(Uri, i32), Vec<Diagnostic>>);
 
 #[derive(Debug)]
 pub struct OpenInkDocument {
@@ -46,8 +26,14 @@ pub struct OpenInkDocument {
 pub struct UpdateInkDocument {
     pub uri: Uri,
     pub version: i32,
-    pub range: Option<Range>,
+    pub range: UpdateRange,
     pub new_text: String,
+}
+
+#[derive(Debug)]
+pub enum UpdateRange {
+    Range(Range),
+    All,
 }
 
 #[derive(Debug)]

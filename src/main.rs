@@ -1,27 +1,24 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use deep_ink_language_server::db::LspDb;
-use deep_ink_language_server::{DbMessage, LspMessage, OpenInkDocument, UpdateInkDocument};
-use tokio::sync::RwLock;
+use deep_ink_language_server::db::start_database_service;
+use deep_ink_language_server::{
+    DbMessage, DiagnosticsMessage, OpenInkDocument, UpdateInkDocument, UpdateRange,
+};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
     client: Client,
     db_message_sender: Sender<DbMessage>,
-    lsp_message_receiver: Arc<RwLock<Receiver<LspMessage>>>,
 }
 
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -50,7 +47,40 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+    async fn workspace_diagnostic(
+        &self,
+        _params: WorkspaceDiagnosticParams,
+    ) -> Result<WorkspaceDiagnosticReportResult> {
+        let (sender, mut receiver) = channel(64);
+        let _ = self
+            .db_message_sender
+            .send(DbMessage::RequestDiagnostics(sender))
+            .await;
+        if let Some(DiagnosticsMessage(diagnostics)) = receiver.recv().await {
+            self.client
+                .log_message(MessageType::INFO, "Received Diagnostics!")
+                .await;
+            let mut items: Vec<WorkspaceDocumentDiagnosticReport> = vec![];
+            for ((uri, version), diagnostics_list) in diagnostics.into_iter() {
+                items.push(WorkspaceDocumentDiagnosticReport::Full(
+                    WorkspaceFullDocumentDiagnosticReport {
+                        uri,
+                        version: Some(version as i64),
+                        full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                            result_id: None,
+                            items: diagnostics_list,
+                        },
+                    },
+                ));
+            }
+            return Result::Ok(WorkspaceDiagnosticReportResult::Report(
+                WorkspaceDiagnosticReport { items },
+            ));
+        };
+        return Result::Err(Error::internal_error());
+    }
+
+    async fn did_change_workspace_folders(&self, _params: DidChangeWorkspaceFoldersParams) {
         self.client
             .log_message(MessageType::INFO, "did change workspace folders!")
             .await;
@@ -70,44 +100,75 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "file opened!")
             .await;
+        let (sender, receiver) = channel(64);
+
         let _ = self
             .db_message_sender
-            .send(DbMessage::Open(OpenInkDocument {
-                uri: params.text_document.uri.clone(),
-                version: params.text_document.version,
-                contents: params.text_document.text.clone(),
-            }))
+            .send(DbMessage::Open(
+                OpenInkDocument {
+                    uri: params.text_document.uri.clone(),
+                    version: params.text_document.version,
+                    contents: params.text_document.text.clone(),
+                },
+                sender,
+            ))
             .await;
 
-        let _ = self.wait_and_publish_diagnostics().await;
+        let _ = self.wait_and_publish_diagnostics(receiver).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file changed!")
             .await;
-        let mut changes: Vec<UpdateInkDocument> = vec![];
-        for change in params.content_changes {
-            changes.push(UpdateInkDocument {
-                uri: params.text_document.uri.clone(),
-                version: params.text_document.version,
-                range: change.range.clone(),
-                new_text: change.text.clone(),
-            });
-        }
-        let _ = self
+        let (sender, receiver) = channel(64);
+        let changes: Vec<UpdateInkDocument> = params
+            .content_changes
+            .into_iter()
+            .map(|mut x| {
+                if let Some(range) = x.range.take() {
+                    UpdateInkDocument {
+                        uri: params.text_document.uri.clone(),
+                        version: params.text_document.version,
+                        range: UpdateRange::Range(range),
+                        new_text: x.text,
+                    }
+                } else {
+                    UpdateInkDocument {
+                        uri: params.text_document.uri.clone(),
+                        version: params.text_document.version,
+                        range: UpdateRange::All,
+                        new_text: x.text,
+                    }
+                }
+            })
+            .collect();
+        match self
             .db_message_sender
-            .send(DbMessage::Update(changes))
-            .await;
-
-        let _ = self.wait_and_publish_diagnostics().await;
+            .send(DbMessage::Update(changes, sender))
+            .await
+        {
+            Ok(_) => {
+                self.wait_and_publish_diagnostics(receiver).await;
+            }
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, err.to_string())
+                    .await;
+            }
+        };
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
+        let (sender, receiver) = channel(64);
         self.client
             .log_message(MessageType::INFO, "file saved!")
             .await;
-        let _ = self.wait_and_publish_diagnostics().await;
+        let _ = self
+            .db_message_sender
+            .send(DbMessage::RequestDiagnostics(sender))
+            .await;
+        let _ = self.wait_and_publish_diagnostics(receiver).await;
     }
 
     async fn did_close(&self, _: DidCloseTextDocumentParams) {
@@ -118,37 +179,34 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    async fn wait_and_publish_diagnostics(&self) {
-        let mut receiver = self.lsp_message_receiver.write().await;
-        if let Some(LspMessage::Diagnostics(diagnostics)) = receiver.recv().await {
-            let mut map: HashMap<(Uri, i32), Vec<Diagnostic>> = HashMap::new();
-            for d in diagnostics {
-                let diagnostic = Diagnostic {
-                    range: d.range.clone(),
-                    severity: d.severity.clone(),
-                    code: None,
-                    code_description: None,
-                    source: d.source.clone(),
-                    message: d.message.clone(),
-                    related_information: d.related_information.clone(),
-                    tags: d.tags.clone(),
-                    ..Default::default()
-                };
-                match map.entry((d.uri.clone(), d.version)) {
-                    std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
-                        occupied_entry.get_mut().push(diagnostic);
-                    }
-                    std::collections::hash_map::Entry::Vacant(vacant_entry) => {
-                        vacant_entry.insert(vec![diagnostic]);
-                    }
-                };
-            }
-            for ((uri, version), diagnostics) in map.into_iter() {
+    async fn wait_and_publish_diagnostics(&self, mut receiver: Receiver<DiagnosticsMessage>) {
+        match receiver.recv().await {
+            Some(DiagnosticsMessage(diagnostics)) => {
                 self.client
-                    .publish_diagnostics(uri, diagnostics, Some(version))
+                    .log_message(MessageType::INFO, "Received Diagnostics!")
+                    .await;
+                for ((uri, version), diagnostics_list) in diagnostics.into_iter() {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!(
+                                "sending through diagnostics for {} with length {}",
+                                uri.to_string(),
+                                diagnostics_list.len()
+                            ),
+                        )
+                        .await;
+                    self.client
+                        .publish_diagnostics(uri, diagnostics_list, Some(version))
+                        .await;
+                }
+            }
+            None => {
+                self.client
+                    .log_message(MessageType::ERROR, "Failed to receive message")
                     .await;
             }
-        }
+        };
     }
 }
 
@@ -157,13 +215,12 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let (db_message_sender, db_message_receiver) = channel(32);
-    let (lsp_message_sender, lsp_message_receiver) = channel(32);
-    let join_handle = LspDb::start_database_service(db_message_receiver, lsp_message_sender);
-    let (service, socket) = LspService::new(|client| Backend {
+    let db_service = start_database_service(db_message_receiver);
+    let (lsp_service, socket) = LspService::new(|client| Backend {
         client,
         db_message_sender,
-        lsp_message_receiver: Arc::new(RwLock::new(lsp_message_receiver)),
     });
-    Server::new(stdin, stdout, socket).serve(service).await;
-    join_handle.await.expect("Expected join");
+    let server = Server::new(stdin, stdout, socket).serve(lsp_service);
+    db_service.await;
+    server.await;
 }
