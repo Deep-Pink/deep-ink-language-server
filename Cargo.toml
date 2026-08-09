@@ -12,3 +12,4 @@ tree-sitter-ink = {path = "vendored/tree-sitter-ink"}
 tree-sitter-deep-pink-ink = {path = "vendored/tree-sitter-deep-pink-ink"}
 ropey = "1.6.1"
 im = "15.1.0"
+query-flow = "0.17.0"
