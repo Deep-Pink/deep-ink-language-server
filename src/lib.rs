@@ -46,3 +46,6 @@ pub struct RenameInkDocument {
     pub old_uri: Uri,
     pub new_uri: Uri,
 }
+
+pub mod multimap;
+pub mod reference_map;

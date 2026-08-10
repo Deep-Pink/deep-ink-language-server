@@ -1,6 +1,7 @@
 use std::cmp::min;
 
 use crate::{DbMessage, DiagnosticsMessage, OpenInkDocument, UpdateInkDocument};
+use im::HashSet;
 use im::hashmap::HashMap;
 use ropey::Rope;
 use tokio::sync::mpsc::Sender;
@@ -8,7 +9,7 @@ use tokio::{sync::mpsc::Receiver, task::JoinHandle};
 use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, Position, Range, Uri};
 use tree_sitter::{InputEdit, Point, Query, QueryCapture, StreamingIterator, Tree};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InkDocument {
     uri: Uri,
     version: i32,
@@ -48,6 +49,14 @@ pub struct InkParser {
 
 pub struct DeepInkParser {
     pub parser: tree_sitter::Parser,
+}
+
+fn update_ink_document_contents(document: &mut InkDocument, ink_parser: &mut InkParser) {
+    document.ink_tree = ink_parser.parser.parse_with_options(
+        &mut |byte: usize, position: Point| document.feeder(byte, position),
+        document.ink_tree.as_ref(),
+        None,
+    );
 }
 
 fn update_deep_ink_document_contents(
@@ -90,6 +99,7 @@ fn update_ink_documents(
     documents: &mut HashMap<Uri, InkDocument>,
     updates: Vec<UpdateInkDocument>,
 ) {
+    let mut dirty = HashSet::new();
     for update in updates {
         eprintln!(
             "Updating doc {} with version {}",
@@ -152,13 +162,16 @@ fn update_ink_documents(
             ink_tree.edit(&edit);
         };
         document.contents = rope.clone();
-        document.ink_tree = ink_parser.parser.parse_with_options(
-            &mut |byte: usize, position: Point| document.feeder(byte, position),
-            document.ink_tree.as_ref(),
-            None,
-        );
+
         document.version = update.version;
-        update_deep_ink_document_contents(document, deep_ink_parser);
+        dirty.insert(document.uri.clone());
+    }
+    for d in dirty {
+        let document = documents
+            .get_mut(&d)
+            .expect("Dirty should never be unable to find the new document");
+        update_ink_document_contents(document, ink_parser);
+        update_deep_ink_document_contents(document, deep_ink_parser)
     }
 }
 
