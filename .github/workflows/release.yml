@@ -30,7 +30,7 @@ jobs:
       - run: mkdir artifacts
       - run: cargo build --release --bins      
       - run: |
-          mkdir ./artifacts
+          mkdir -p ./artifacts
           mv ./target/release/${{matrix.binary-name}} ./artifacts/${{matrix.output-name}}
       - name: Release
         uses: softprops/action-gh-release@v3
