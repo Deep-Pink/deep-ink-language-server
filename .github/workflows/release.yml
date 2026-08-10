@@ -1,4 +1,4 @@
-name: Deploy Language Server
+name: Release Language Server
 on:
   push:
     tags:
@@ -22,7 +22,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: mkdir artifacts
