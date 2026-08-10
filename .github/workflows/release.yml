@@ -4,9 +4,9 @@ on:
     tags:
       - "v*.*.*"
 jobs:
-  build_artifacts:    
+  build_artifacts:
     strategy:
-      matrix: 
+      matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - binary-name: deep-ink-language-server
@@ -27,14 +27,17 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: mkdir artifacts
-      - run: cargo build --release --bins      
-      - run: |
+      - run: cargo build --release --bins
+      - name: create_artifacts_folder
+        shell: bash
+        run: |
           mkdir -p ./artifacts
           mv ./target/release/${{matrix.binary-name}} ./artifacts/${{matrix.output-name}}
+          cp ./LICENSE ./artifacts/LICENSE
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
           working_directory: artifacts
           files: |
             ${{matrix.output-name}}
+            LICENSE
