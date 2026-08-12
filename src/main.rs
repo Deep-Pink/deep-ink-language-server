@@ -68,7 +68,7 @@ impl LanguageServer for Backend {
                         version: Some(version as i64),
                         full_document_diagnostic_report: FullDocumentDiagnosticReport {
                             result_id: None,
-                            items: diagnostics_list,
+                            items: diagnostics_list.into_iter().map(|x| x.0).collect(),
                         },
                     },
                 ));
@@ -197,7 +197,11 @@ impl Backend {
                         )
                         .await;
                     self.client
-                        .publish_diagnostics(uri, diagnostics_list, Some(version))
+                        .publish_diagnostics(
+                            uri,
+                            diagnostics_list.into_iter().map(|x| x.0).collect(),
+                            Some(version),
+                        )
                         .await;
                 }
             }
@@ -215,7 +219,15 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let (db_message_sender, db_message_receiver) = channel(32);
-    let db_service = start_database_service(db_message_receiver);
+    let mut use_deep_ink = false;
+    for v in std::env::vars() {
+        if v.0 == "USE_DEEP_INK" {
+            let value = v.1;
+            use_deep_ink = value == "1" || value == "TRUE" || value == "true";
+        }
+    }
+
+    let db_service = start_database_service(db_message_receiver, use_deep_ink);
     let (lsp_service, socket) = LspService::new(|client| Backend {
         client,
         db_message_sender,

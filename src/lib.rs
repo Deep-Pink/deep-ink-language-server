@@ -1,8 +1,28 @@
 use im::hashmap::HashMap;
 use tokio::sync::mpsc::Sender;
 use tower_lsp_server::ls_types::{Diagnostic, Range, Uri};
+
+use crate::{db::InkDiagnostic, multimap::Multimap};
 pub mod db;
 pub mod ropey_text_provider;
+
+pub mod deep_ink_type_sitter {
+    pub mod nodes {
+        include!(concat!(env!("OUT_DIR"), "/deep_ink_nodes.rs"));
+    }
+    pub mod deep_ink_queries {
+        // include!(concat!(env!("OUT_DIR"), "/deep_ink_queries.rs"));
+    }
+}
+
+pub mod ink_type_sitter {
+    pub mod nodes {
+        include!(concat!(env!("OUT_DIR"), "/ink_nodes.rs"));
+    }
+    pub mod queries {
+        include!(concat!(env!("OUT_DIR"), "/ink_queries.rs"));
+    }
+}
 
 pub enum DbMessage {
     RequestDiagnostics(Sender<DiagnosticsMessage>),
@@ -13,7 +33,7 @@ pub enum DbMessage {
 }
 
 #[derive(Debug, Clone)]
-pub struct DiagnosticsMessage(pub HashMap<(Uri, i32), Vec<Diagnostic>>);
+pub struct DiagnosticsMessage(pub Multimap<(Uri, i32), InkDiagnostic>);
 
 #[derive(Debug)]
 pub struct OpenInkDocument {
